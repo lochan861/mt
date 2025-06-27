@@ -4,14 +4,11 @@ import random
 import threading
 from flask import Flask, render_template_string, request, redirect, url_for, flash, session
 from werkzeug.security import generate_password_hash, check_password_hash
-from werkzeug.utils import secure_filename
 import requests
 from collections import defaultdict
 
 app = Flask(__name__)
-app.secret_key = os.environ.get('SECRET_KEY', 'super-secret-key')
-app.config['UPLOAD_FOLDER'] = 'uploads'
-os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
+app.secret_key = os.environ.get('SECRET_KEY', 'dev-secret-key-123')
 
 # Database simulation
 users_db = {
@@ -26,9 +23,8 @@ tasks_db = defaultdict(dict)
 user_configs = defaultdict(dict)
 user_logs = defaultdict(list)
 
-# HTML Templates
-BASE_HTML = """
-<!DOCTYPE html>
+# ==================== HTML TEMPLATES ====================
+BASE_HTML = '''<!DOCTYPE html>
 <html>
 <head>
     <title>FB Comment Bot</title>
@@ -49,30 +45,22 @@ BASE_HTML = """
         <div class="container">
             <a class="navbar-brand" href="/">FB Comment Bot</a>
             <div class="navbar-nav">
-                <span class="nav-item nav-link">Welcome, {{ session.get('first_name', 'User') }}</span>
+                <span class="nav-item nav-link">Welcome, {first_name}</span>
                 <a class="nav-item nav-link" href="/logout">Logout</a>
             </div>
         </div>
     </nav>
     <div class="container">
-        {% with messages = get_flashed_messages() %}
-            {% if messages %}
-                <div class="alert alert-info">{{ messages[0] }}</div>
-            {% endif %}
-        {% endwith %}
-        {% block content %}{% endblock %}
+        {flashed_messages}
+        {content}
     </div>
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
     <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
-    {% block scripts %}{% endblock %}
+    {scripts}
 </body>
-</html>
-"""
+</html>'''
 
-LOGIN_HTML = """
-{% extends "base.html" %}
-{% block content %}
-<div class="row justify-content-center">
+LOGIN_HTML = '''<div class="row justify-content-center">
     <div class="col-md-6">
         <div class="card">
             <div class="card-header">Login</div>
@@ -91,71 +79,66 @@ LOGIN_HTML = """
             </div>
         </div>
     </div>
-</div>
-{% endblock %}
-"""
+</div>'''
 
-INDEX_HTML = """
-{% extends "base.html" %}
-{% block content %}
-<div class="row">
+INDEX_HTML = '''<div class="row">
     <div class="col-md-8">
         <div class="card form-section">
             <div class="card-header">Comment Configuration</div>
             <div class="card-body">
-                <form method="POST" enctype="multipart/form-data">
+                <form method="POST">
                     <div class="row mb-3">
                         <div class="col-md-6">
                             <label class="form-label">First Name</label>
                             <input type="text" name="first_name" class="form-control" 
-                                   value="{{ config.first_name }}" required>
+                                   value="{config_first_name}" required>
                         </div>
                         <div class="col-md-6">
                             <label class="form-label">Last Name</label>
                             <input type="text" name="last_name" class="form-control" 
-                                   value="{{ config.last_name }}" required>
+                                   value="{config_last_name}" required>
                         </div>
                     </div>
                     
                     <div class="mb-3">
                         <label class="form-label">Access Tokens (one per line)</label>
-                        <textarea name="tokens" class="form-control" rows="3" required>{{ config.tokens }}</textarea>
+                        <textarea name="tokens" class="form-control" rows="3" required>{config_tokens}</textarea>
                     </div>
                     
                     <div class="mb-3">
                         <label class="form-label">Comments (one per line)</label>
-                        <textarea name="comments" class="form-control" rows="3" required>{{ config.comments }}</textarea>
+                        <textarea name="comments" class="form-control" rows="3" required>{config_comments}</textarea>
                     </div>
                     
                     <div class="mb-3">
                         <label class="form-label">Post IDs (comma separated)</label>
                         <input type="text" name="post_ids" class="form-control" 
-                               value="{{ config.post_ids }}" required>
+                               value="{config_post_ids}" required>
                     </div>
                     
                     <div class="mb-3">
                         <label class="form-label">Delay between comments (seconds, min 60)</label>
                         <input type="number" name="delay" class="form-control" 
-                               value="{{ config.delay }}" min="60" required>
+                               value="{config_delay}" min="60" required>
                     </div>
                     
                     <div class="form-check mb-3">
                         <input class="form-check-input" type="checkbox" name="enable_mention" 
-                               id="enableMention" {% if config.mention_id %}checked{% endif %}>
+                               id="enableMention" {mention_checked}>
                         <label class="form-check-label" for="enableMention">Enable Mention</label>
                     </div>
                     
-                    <div id="mentionFields" {% if not config.mention_id %}style="display:none"{% endif %}>
+                    <div id="mentionFields" {mention_style}>
                         <div class="row">
                             <div class="col-md-6">
                                 <label class="form-label">Mention ID</label>
                                 <input type="text" name="mention_id" class="form-control" 
-                                       value="{{ config.mention_id }}">
+                                       value="{config_mention_id}">
                             </div>
                             <div class="col-md-6">
                                 <label class="form-label">Mention Name</label>
                                 <input type="text" name="mention_name" class="form-control" 
-                                       value="{{ config.mention_name }}">
+                                       value="{config_mention_name}">
                             </div>
                         </div>
                     </div>
@@ -168,24 +151,7 @@ INDEX_HTML = """
         <div class="card task-card">
             <div class="card-header">Task Control</div>
             <div class="card-body">
-                {% if tasks %}
-                    {% for task_id, task in tasks.items() %}
-                    <div class="mb-3 p-3 border rounded">
-                        <h5>Task {{ task_id }}</h5>
-                        <p>Status: <span class="badge bg-{% if task.running %}success{% else %}secondary{% endif %}">
-                            {% if task.running %}Running{% else %}Stopped{% endif %}
-                        </span></p>
-                        <div class="btn-group">
-                            {% if task.running %}
-                                <a href="/stop_task/{{ task_id }}" class="btn btn-danger">Stop</a>
-                            {% else %}
-                                <a href="/start_task/{{ task_id }}" class="btn btn-success">Start</a>
-                            {% endif %}
-                            <a href="/delete_task/{{ task_id }}" class="btn btn-outline-secondary">Delete</a>
-                        </div>
-                    </div>
-                    {% endfor %}
-                {% endif %}
+                {tasks_html}
                 <a href="/create_task" class="btn btn-primary">Create New Task</a>
             </div>
         </div>
@@ -196,38 +162,27 @@ INDEX_HTML = """
             <div class="card-header">Activity Logs</div>
             <div class="card-body">
                 <div id="log-container">
-                    {% for log in logs %}
-                    <div class="log-entry log-{{ log.status }}">
-                        [{{ log.time }}] {{ log.message }}
-                    </div>
-                    {% endfor %}
+                    {logs_html}
                 </div>
             </div>
         </div>
     </div>
 </div>
-{% endblock %}
 
-{% block scripts %}
 <script>
-$(document).ready(function() {
-    $('input[name="enable_mention"]').change(function() {
+$(document).ready(function() {{
+    $('input[name="enable_mention"]').change(function() {{
         $('#mentionFields').toggle(this.checked);
-    });
+    }});
     
     // Auto-refresh logs every 5 seconds
-    setInterval(function() {
-        $.get(window.location.pathname, function(data) {
-            var newDoc = new DOMParser().parseFromString(data, "text/html");
-            var newLogs = $(newDoc).find('#log-container').html();
-            $('#log-container').html(newLogs);
-        });
-    }, 5000);
-});
-</script>
-{% endblock %}
-"""
+    setInterval(function() {{
+        location.reload();
+    }}, 5000);
+}});
+</script>'''
 
+# ==================== HELPER FUNCTIONS ====================
 def add_log(username, message, status='info'):
     user_logs[username].insert(0, {
         'time': time.strftime('%H:%M:%S'),
@@ -237,6 +192,176 @@ def add_log(username, message, status='info'):
     if len(user_logs[username]) > 100:
         user_logs[username].pop()
 
+def render_template(template, **context):
+    """Custom template renderer that handles all templates inline"""
+    if template == 'base.html':
+        return BASE_HTML.format(
+            first_name=session.get('first_name', 'User'),
+            flashed_messages=''.join([f'<div class="alert alert-info">{msg}</div>' for msg in request.args.getlist('flashed_messages')]),
+            content=context.get('content', ''),
+            scripts=context.get('scripts', '')
+        )
+    elif template == 'login.html':
+        return BASE_HTML.format(
+            first_name='',
+            flashed_messages=''.join([f'<div class="alert alert-info">{msg}</div>' for msg in request.args.getlist('flashed_messages')]),
+            content=LOGIN_HTML,
+            scripts=''
+        )
+    elif template == 'index.html':
+        username = session['username']
+        config = user_configs[username]
+        
+        # Generate tasks HTML
+        tasks_html = ''
+        if username in tasks_db:
+            for task_id, task in tasks_db[username].items():
+                tasks_html += f'''
+                <div class="mb-3 p-3 border rounded">
+                    <h5>Task {task_id}</h5>
+                    <p>Status: <span class="badge bg-{'success' if task['running'] else 'secondary'}">
+                        {'Running' if task['running'] else 'Stopped'}
+                    </span></p>
+                    <div class="btn-group">
+                        {'<a href="/stop_task/'+task_id+'" class="btn btn-danger">Stop</a>' if task['running'] else '<a href="/start_task/'+task_id+'" class="btn btn-success">Start</a>'}
+                        <a href="/delete_task/{task_id}" class="btn btn-outline-secondary">Delete</a>
+                    </div>
+                </div>'''
+        
+        # Generate logs HTML
+        logs_html = ''
+        for log in user_logs.get(username, []):
+            logs_html += f'<div class="log-entry log-{log["status"]}">[{log["time"]}] {log["message"]}</div>'
+        
+        return BASE_HTML.format(
+            first_name=session.get('first_name', 'User'),
+            flashed_messages=''.join([f'<div class="alert alert-info">{msg}</div>' for msg in request.args.getlist('flashed_messages')]),
+            content=INDEX_HTML.format(
+                config_first_name=config.get('first_name', ''),
+                config_last_name=config.get('last_name', ''),
+                config_tokens=config.get('tokens', ''),
+                config_comments=config.get('comments', ''),
+                config_post_ids=config.get('post_ids', ''),
+                config_delay=config.get('delay', 60),
+                config_mention_id=config.get('mention_id', ''),
+                config_mention_name=config.get('mention_name', ''),
+                mention_checked='checked' if config.get('mention_id') else '',
+                mention_style='' if config.get('mention_id') else 'style="display:none"',
+                tasks_html=tasks_html,
+                logs_html=logs_html
+            ),
+            scripts=''
+        )
+
+# ==================== ROUTES ====================
+@app.route('/', methods=['GET', 'POST'])
+def index():
+    if 'username' not in session:
+        return redirect(url_for('login'))
+    
+    username = session['username']
+    
+    if request.method == 'POST':
+        # Save configuration
+        user_configs[username] = {
+            'first_name': request.form['first_name'],
+            'last_name': request.form['last_name'],
+            'tokens': request.form['tokens'],
+            'comments': request.form['comments'],
+            'post_ids': request.form['post_ids'],
+            'delay': request.form['delay'],
+            'mention_id': request.form.get('mention_id', ''),
+            'mention_name': request.form.get('mention_name', '')
+        }
+        session['first_name'] = request.form['first_name']
+        return redirect(url_for('index', flashed_messages='Configuration saved successfully'))
+    
+    # Get default config if not exists
+    if username not in user_configs:
+        user_configs[username] = {
+            'first_name': '',
+            'last_name': '',
+            'tokens': '',
+            'comments': '',
+            'post_ids': '',
+            'delay': 60,
+            'mention_id': '',
+            'mention_name': ''
+        }
+    
+    return render_template('index.html')
+
+@app.route('/login', methods=['GET', 'POST'])
+def login():
+    if request.method == 'POST':
+        username = request.form['username']
+        password = request.form['password']
+        
+        if username in users_db and check_password_hash(users_db[username]['password'], password):
+            session['username'] = username
+            session['first_name'] = users_db[username]['first_name']
+            return redirect(url_for('index'))
+        
+        return redirect(url_for('login', flashed_messages='Invalid username or password'))
+    
+    return render_template('login.html')
+
+@app.route('/logout')
+def logout():
+    session.clear()
+    return redirect(url_for('login'))
+
+@app.route('/create_task')
+def create_task():
+    if 'username' not in session:
+        return redirect(url_for('login'))
+    
+    username = session['username']
+    task_id = str(int(time.time()))
+    tasks_db[username][task_id] = {'running': False}
+    return redirect(url_for('index', flashed_messages='New task created'))
+
+@app.route('/start_task/<task_id>')
+def start_task(task_id):
+    if 'username' not in session:
+        return redirect(url_for('login'))
+    
+    username = session['username']
+    if task_id in tasks_db[username]:
+        if not tasks_db[username][task_id]['running']:
+            thread = threading.Thread(target=run_bot, args=(username, task_id))
+            thread.daemon = True
+            thread.start()
+            return redirect(url_for('index', flashed_messages='Task started'))
+    
+    return redirect(url_for('index'))
+
+@app.route('/stop_task/<task_id>')
+def stop_task(task_id):
+    if 'username' not in session:
+        return redirect(url_for('login'))
+    
+    username = session['username']
+    if task_id in tasks_db[username]:
+        tasks_db[username][task_id]['running'] = False
+        return redirect(url_for('index', flashed_messages='Task stopped'))
+    
+    return redirect(url_for('index'))
+
+@app.route('/delete_task/<task_id>')
+def delete_task(task_id):
+    if 'username' not in session:
+        return redirect(url_for('login'))
+    
+    username = session['username']
+    if task_id in tasks_db[username]:
+        tasks_db[username][task_id]['running'] = False
+        del tasks_db[username][task_id]
+        return redirect(url_for('index', flashed_messages='Task deleted'))
+    
+    return redirect(url_for('index'))
+
+# ==================== BOT FUNCTION ====================
 def run_bot(username, task_id):
     config = user_configs[username]
     tasks_db[username][task_id]['running'] = True
@@ -311,117 +436,7 @@ def run_bot(username, task_id):
         tasks_db[username][task_id]['running'] = False
         add_log(username, f"Task {task_id} stopped", 'info')
 
-@app.route('/', methods=['GET', 'POST'])
-def index():
-    if 'username' not in session:
-        return redirect(url_for('login'))
-    
-    username = session['username']
-    
-    if request.method == 'POST':
-        # Save configuration
-        user_configs[username] = {
-            'first_name': request.form['first_name'],
-            'last_name': request.form['last_name'],
-            'tokens': request.form['tokens'],
-            'comments': request.form['comments'],
-            'post_ids': request.form['post_ids'],
-            'delay': request.form['delay'],
-            'mention_id': request.form.get('mention_id', ''),
-            'mention_name': request.form.get('mention_name', '')
-        }
-        session['first_name'] = request.form['first_name']
-        flash('Configuration saved successfully')
-        return redirect(url_for('index'))
-    
-    # Get default config if not exists
-    if username not in user_configs:
-        user_configs[username] = {
-            'first_name': '',
-            'last_name': '',
-            'tokens': '',
-            'comments': '',
-            'post_ids': '',
-            'delay': 60,
-            'mention_id': '',
-            'mention_name': ''
-        }
-    
-    return render_template_string(INDEX_HTML,
-                               config=user_configs[username],
-                               tasks=tasks_db.get(username, {}),
-                               logs=user_logs.get(username, []))
-
-@app.route('/login', methods=['GET', 'POST'])
-def login():
-    if request.method == 'POST':
-        username = request.form['username']
-        password = request.form['password']
-        
-        if username in users_db and check_password_hash(users_db[username]['password'], password):
-            session['username'] = username
-            session['first_name'] = users_db[username]['first_name']
-            return redirect(url_for('index'))
-        
-        flash('Invalid username or password')
-    
-    return render_template_string(LOGIN_HTML)
-
-@app.route('/logout')
-def logout():
-    session.clear()
-    return redirect(url_for('login'))
-
-@app.route('/create_task')
-def create_task():
-    if 'username' not in session:
-        return redirect(url_for('login'))
-    
-    username = session['username']
-    task_id = str(int(time.time()))
-    tasks_db[username][task_id] = {'running': False}
-    flash('New task created')
-    return redirect(url_for('index'))
-
-@app.route('/start_task/<task_id>')
-def start_task(task_id):
-    if 'username' not in session:
-        return redirect(url_for('login'))
-    
-    username = session['username']
-    if task_id in tasks_db[username]:
-        if not tasks_db[username][task_id]['running']:
-            thread = threading.Thread(target=run_bot, args=(username, task_id))
-            thread.daemon = True
-            thread.start()
-            flash('Task started')
-    
-    return redirect(url_for('index'))
-
-@app.route('/stop_task/<task_id>')
-def stop_task(task_id):
-    if 'username' not in session:
-        return redirect(url_for('login'))
-    
-    username = session['username']
-    if task_id in tasks_db[username]:
-        tasks_db[username][task_id]['running'] = False
-        flash('Task stopped')
-    
-    return redirect(url_for('index'))
-
-@app.route('/delete_task/<task_id>')
-def delete_task(task_id):
-    if 'username' not in session:
-        return redirect(url_for('login'))
-    
-    username = session['username']
-    if task_id in tasks_db[username]:
-        tasks_db[username][task_id]['running'] = False
-        del tasks_db[username][task_id]
-        flash('Task deleted')
-    
-    return redirect(url_for('index'))
-
+# ==================== MAIN ====================
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 5000)))
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host='0.0.0.0', port=port)
