@@ -1,195 +1,427 @@
-from flask import Flask, render_template_string, request, redirect, url_for, flash, jsonify
-import requests
+import os
 import time
 import random
-import os
+import threading
+from flask import Flask, render_template_string, request, redirect, url_for, flash, session
+from werkzeug.security import generate_password_hash, check_password_hash
+from werkzeug.utils import secure_filename
+import requests
+from collections import defaultdict
 
 app = Flask(__name__)
-app.secret_key = 'your_secret_key_here'
+app.secret_key = os.environ.get('SECRET_KEY', 'super-secret-key')
+app.config['UPLOAD_FOLDER'] = 'uploads'
+os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
 
-UPLOAD_FOLDER = 'uploads'
-os.makedirs(UPLOAD_FOLDER, exist_ok=True)
-app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
+# Database simulation
+users_db = {
+    'admin': {
+        'password': generate_password_hash('admin'),
+        'first_name': 'Admin',
+        'last_name': 'User'
+    }
+}
 
-# ====== Utility Functions =======
-def validate_token(token):
-    try:
-        response = requests.get(f'https://graph.facebook.com/me?access_token={token}')
-        data = response.json()
-        if response.status_code == 200 and "name" in data:
-            return "profile", data.get("name")
-        return None, None
-    except:
-        return None, None
+tasks_db = defaultdict(dict)
+user_configs = defaultdict(dict)
+user_logs = defaultdict(list)
 
-def post_comment(post_id, comment, token, mention_id=None, mention_name=None):
-    if mention_id and mention_name:
-        comment = f"@[{mention_id}:{mention_name}] {comment}"
-    try:
-        response = requests.post(
-            f'https://graph.facebook.com/{post_id}/comments/',
-            data={'message': comment, 'access_token': token},
-            timeout=10
-        )
-        if response.status_code != 200:
-            return {"error": f"HTTP {response.status_code}: {response.text}"}
-        return response.json()
-    except Exception as e:
-        return {"error": str(e)}
-
-def read_file_lines(filepath):
-    with open(filepath, 'r', encoding='utf-8') as f:
-        return [line.strip() for line in f if line.strip()]
-
-# ====== HTML Templates =======
-index_template = '''
+# HTML Templates
+BASE_HTML = """
 <!DOCTYPE html>
-<html lang="en">
+<html>
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>MENTION-POST</title>
-  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet"/>
+    <title>FB Comment Bot</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        body { padding: 20px; background-color: #f8f9fa; }
+        .log-entry { padding: 8px; margin: 4px 0; border-radius: 4px; }
+        .log-success { background-color: #d4edda; border-left: 4px solid #28a745; }
+        .log-error { background-color: #f8d7da; border-left: 4px solid #dc3545; }
+        .log-info { background-color: #e2e3e5; border-left: 4px solid #6c757d; }
+        #log-container { max-height: 400px; overflow-y: auto; }
+        .task-card { margin-bottom: 20px; }
+        .form-section { margin-bottom: 30px; }
+    </style>
 </head>
-<body class="bg-light">
-  <div class="container mt-5">
-    <div class="card shadow">
-      <div class="card-header bg-primary text-white">
-        <h4>Facebook Comment Poster</h4>
-      </div>
-      <div class="card-body">
-        {% with messages = get_flashed_messages(with_categories=true) %}
-          {% if messages %}
-            {% for category, message in messages %}
-              <div class="alert alert-{{ category }}">{{ message }}</div>
-            {% endfor %}
-          {% endif %}
+<body>
+    <nav class="navbar navbar-expand-lg navbar-dark bg-dark mb-4">
+        <div class="container">
+            <a class="navbar-brand" href="/">FB Comment Bot</a>
+            <div class="navbar-nav">
+                <span class="nav-item nav-link">Welcome, {{ session.get('first_name', 'User') }}</span>
+                <a class="nav-item nav-link" href="/logout">Logout</a>
+            </div>
+        </div>
+    </nav>
+    <div class="container">
+        {% with messages = get_flashed_messages() %}
+            {% if messages %}
+                <div class="alert alert-info">{{ messages[0] }}</div>
+            {% endif %}
         {% endwith %}
-        <form method="POST" enctype="multipart/form-data">
-          <div class="mb-3">
-            <label class="form-label">Access Token File (.txt)</label>
-            <input type="file" name="token_file" class="form-control" accept=".txt" required>
-          </div>
-          <div class="mb-3">
-            <label class="form-label">Comments File (.txt)</label>
-            <input type="file" name="comment_file" class="form-control" accept=".txt" required>
-          </div>
-          <div class="mb-3">
-            <label class="form-label">Post IDs (comma-separated)</label>
-            <input type="text" name="post_ids" class="form-control" required>
-          </div>
-          <div class="mb-3">
-            <label class="form-label">Mention ID (optional)</label>
-            <input type="text" name="mention_id" class="form-control">
-          </div>
-          <div class="mb-3">
-            <label class="form-label">Mention Name (optional)</label>
-            <input type="text" name="mention_name" class="form-control">
-          </div>
-          <div class="mb-3">
-            <label class="form-label">Delay (seconds, default 60)</label>
-            <input type="number" name="delay" class="form-control" min="60" value="60">
-          </div>
-          <button type="submit" class="btn btn-success">Start Commenting</button>
-        </form>
-      </div>
+        {% block content %}{% endblock %}
     </div>
-  </div>
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+    {% block scripts %}{% endblock %}
 </body>
 </html>
-'''
+"""
 
-result_template = '''
-<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>Results</title>
-  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet"/>
-</head>
-<body class="bg-light">
-  <div class="container mt-5">
-    <div class="card shadow">
-      <div class="card-header bg-success text-white">
-        <h4>Results</h4>
-      </div>
-      <div class="card-body">
-        {% for r in results %}
-          <div class="border p-3 mb-2">
-            <strong>Post ID:</strong> {{ r.post_id }}<br>
-            <strong>Comment:</strong> {{ r.comment }}<br>
-            <strong>Result:</strong> {{ r.result | tojson(indent=2) }}
-          </div>
-        {% endfor %}
-        <a href="/" class="btn btn-primary">Back</a>
-      </div>
+LOGIN_HTML = """
+{% extends "base.html" %}
+{% block content %}
+<div class="row justify-content-center">
+    <div class="col-md-6">
+        <div class="card">
+            <div class="card-header">Login</div>
+            <div class="card-body">
+                <form method="POST">
+                    <div class="mb-3">
+                        <label class="form-label">Username</label>
+                        <input type="text" name="username" class="form-control" required>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Password</label>
+                        <input type="password" name="password" class="form-control" required>
+                    </div>
+                    <button type="submit" class="btn btn-primary">Login</button>
+                </form>
+            </div>
+        </div>
     </div>
-  </div>
-</body>
-</html>
-'''
+</div>
+{% endblock %}
+"""
 
-# ====== Routes =======
+INDEX_HTML = """
+{% extends "base.html" %}
+{% block content %}
+<div class="row">
+    <div class="col-md-8">
+        <div class="card form-section">
+            <div class="card-header">Comment Configuration</div>
+            <div class="card-body">
+                <form method="POST" enctype="multipart/form-data">
+                    <div class="row mb-3">
+                        <div class="col-md-6">
+                            <label class="form-label">First Name</label>
+                            <input type="text" name="first_name" class="form-control" 
+                                   value="{{ config.first_name }}" required>
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label">Last Name</label>
+                            <input type="text" name="last_name" class="form-control" 
+                                   value="{{ config.last_name }}" required>
+                        </div>
+                    </div>
+                    
+                    <div class="mb-3">
+                        <label class="form-label">Access Tokens (one per line)</label>
+                        <textarea name="tokens" class="form-control" rows="3" required>{{ config.tokens }}</textarea>
+                    </div>
+                    
+                    <div class="mb-3">
+                        <label class="form-label">Comments (one per line)</label>
+                        <textarea name="comments" class="form-control" rows="3" required>{{ config.comments }}</textarea>
+                    </div>
+                    
+                    <div class="mb-3">
+                        <label class="form-label">Post IDs (comma separated)</label>
+                        <input type="text" name="post_ids" class="form-control" 
+                               value="{{ config.post_ids }}" required>
+                    </div>
+                    
+                    <div class="mb-3">
+                        <label class="form-label">Delay between comments (seconds, min 60)</label>
+                        <input type="number" name="delay" class="form-control" 
+                               value="{{ config.delay }}" min="60" required>
+                    </div>
+                    
+                    <div class="form-check mb-3">
+                        <input class="form-check-input" type="checkbox" name="enable_mention" 
+                               id="enableMention" {% if config.mention_id %}checked{% endif %}>
+                        <label class="form-check-label" for="enableMention">Enable Mention</label>
+                    </div>
+                    
+                    <div id="mentionFields" {% if not config.mention_id %}style="display:none"{% endif %}>
+                        <div class="row">
+                            <div class="col-md-6">
+                                <label class="form-label">Mention ID</label>
+                                <input type="text" name="mention_id" class="form-control" 
+                                       value="{{ config.mention_id }}">
+                            </div>
+                            <div class="col-md-6">
+                                <label class="form-label">Mention Name</label>
+                                <input type="text" name="mention_name" class="form-control" 
+                                       value="{{ config.mention_name }}">
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <button type="submit" class="btn btn-primary mt-3">Save Configuration</button>
+                </form>
+            </div>
+        </div>
+        
+        <div class="card task-card">
+            <div class="card-header">Task Control</div>
+            <div class="card-body">
+                {% if tasks %}
+                    {% for task_id, task in tasks.items() %}
+                    <div class="mb-3 p-3 border rounded">
+                        <h5>Task {{ task_id }}</h5>
+                        <p>Status: <span class="badge bg-{% if task.running %}success{% else %}secondary{% endif %}">
+                            {% if task.running %}Running{% else %}Stopped{% endif %}
+                        </span></p>
+                        <div class="btn-group">
+                            {% if task.running %}
+                                <a href="/stop_task/{{ task_id }}" class="btn btn-danger">Stop</a>
+                            {% else %}
+                                <a href="/start_task/{{ task_id }}" class="btn btn-success">Start</a>
+                            {% endif %}
+                            <a href="/delete_task/{{ task_id }}" class="btn btn-outline-secondary">Delete</a>
+                        </div>
+                    </div>
+                    {% endfor %}
+                {% endif %}
+                <a href="/create_task" class="btn btn-primary">Create New Task</a>
+            </div>
+        </div>
+    </div>
+    
+    <div class="col-md-4">
+        <div class="card">
+            <div class="card-header">Activity Logs</div>
+            <div class="card-body">
+                <div id="log-container">
+                    {% for log in logs %}
+                    <div class="log-entry log-{{ log.status }}">
+                        [{{ log.time }}] {{ log.message }}
+                    </div>
+                    {% endfor %}
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+$(document).ready(function() {
+    $('input[name="enable_mention"]').change(function() {
+        $('#mentionFields').toggle(this.checked);
+    });
+    
+    // Auto-refresh logs every 5 seconds
+    setInterval(function() {
+        $.get(window.location.pathname, function(data) {
+            var newDoc = new DOMParser().parseFromString(data, "text/html");
+            var newLogs = $(newDoc).find('#log-container').html();
+            $('#log-container').html(newLogs);
+        });
+    }, 5000);
+});
+</script>
+{% endblock %}
+"""
+
+def add_log(username, message, status='info'):
+    user_logs[username].insert(0, {
+        'time': time.strftime('%H:%M:%S'),
+        'message': message,
+        'status': status
+    })
+    if len(user_logs[username]) > 100:
+        user_logs[username].pop()
+
+def run_bot(username, task_id):
+    config = user_configs[username]
+    tasks_db[username][task_id]['running'] = True
+    
+    try:
+        tokens = [t.strip() for t in config['tokens'].split('\n') if t.strip()]
+        comments = [c.strip() for c in config['comments'].split('\n') if c.strip()]
+        post_ids = [p.strip() for p in config['post_ids'].split(',') if p.strip()]
+        delay = int(config['delay'])
+        
+        add_log(username, f"Task {task_id} started with {len(tokens)} tokens, {len(comments)} comments, {len(post_ids)} targets", 'info')
+        
+        while tasks_db[username][task_id]['running']:
+            for token in tokens:
+                if not tasks_db[username][task_id]['running']:
+                    break
+                    
+                # Validate token
+                try:
+                    resp = requests.get(f'https://graph.facebook.com/me?access_token={token}', timeout=10)
+                    if resp.status_code != 200:
+                        add_log(username, f"Invalid token: {token[:10]}...", 'error')
+                        continue
+                    user_info = resp.json()
+                except Exception as e:
+                    add_log(username, f"Token validation failed: {str(e)}", 'error')
+                    continue
+                
+                for comment in comments:
+                    if not tasks_db[username][task_id]['running']:
+                        break
+                        
+                    for post_id in post_ids:
+                        if not tasks_db[username][task_id]['running']:
+                            break
+                            
+                        try:
+                            # Format comment
+                            full_comment = f"{config['first_name']} {comment} {config['last_name']}"
+                            if config.get('mention_id'):
+                                full_comment = f"@[{config['mention_id']}:{config['mention_name']}] {full_comment}"
+                            
+                            # Post comment
+                            resp = requests.post(
+                                f'https://graph.facebook.com/{post_id}/comments',
+                                data={'message': full_comment, 'access_token': token},
+                                timeout=10
+                            )
+                            
+                            if resp.status_code == 200:
+                                add_log(username, f"Posted to {post_id}: {full_comment[:50]}...", 'success')
+                            else:
+                                error = resp.json().get('error', {}).get('message', 'Unknown error')
+                                add_log(username, f"Failed on {post_id}: {error}", 'error')
+                            
+                            # Random delay
+                            sleep_time = random.randint(delay, delay + 30)
+                            for _ in range(sleep_time):
+                                if not tasks_db[username][task_id]['running']:
+                                    break
+                                time.sleep(1)
+                                
+                        except Exception as e:
+                            add_log(username, f"Error: {str(e)}", 'error')
+                            time.sleep(10)
+            
+            add_log(username, f"Task {task_id} completed one full cycle", 'info')
+    
+    except Exception as e:
+        add_log(username, f"Task {task_id} crashed: {str(e)}", 'error')
+    finally:
+        tasks_db[username][task_id]['running'] = False
+        add_log(username, f"Task {task_id} stopped", 'info')
+
 @app.route('/', methods=['GET', 'POST'])
 def index():
+    if 'username' not in session:
+        return redirect(url_for('login'))
+    
+    username = session['username']
+    
     if request.method == 'POST':
-        token_file = request.files.get('token_file')
-        comment_file = request.files.get('comment_file')
+        # Save configuration
+        user_configs[username] = {
+            'first_name': request.form['first_name'],
+            'last_name': request.form['last_name'],
+            'tokens': request.form['tokens'],
+            'comments': request.form['comments'],
+            'post_ids': request.form['post_ids'],
+            'delay': request.form['delay'],
+            'mention_id': request.form.get('mention_id', ''),
+            'mention_name': request.form.get('mention_name', '')
+        }
+        session['first_name'] = request.form['first_name']
+        flash('Configuration saved successfully')
+        return redirect(url_for('index'))
+    
+    # Get default config if not exists
+    if username not in user_configs:
+        user_configs[username] = {
+            'first_name': '',
+            'last_name': '',
+            'tokens': '',
+            'comments': '',
+            'post_ids': '',
+            'delay': 60,
+            'mention_id': '',
+            'mention_name': ''
+        }
+    
+    return render_template_string(INDEX_HTML,
+                               config=user_configs[username],
+                               tasks=tasks_db.get(username, {}),
+                               logs=user_logs.get(username, []))
 
-        if not token_file or not comment_file:
-            flash("Both token and comment files are required.", "danger")
+@app.route('/login', methods=['GET', 'POST'])
+def login():
+    if request.method == 'POST':
+        username = request.form['username']
+        password = request.form['password']
+        
+        if username in users_db and check_password_hash(users_db[username]['password'], password):
+            session['username'] = username
+            session['first_name'] = users_db[username]['first_name']
             return redirect(url_for('index'))
+        
+        flash('Invalid username or password')
+    
+    return render_template_string(LOGIN_HTML)
 
-        token_path = os.path.join(app.config['UPLOAD_FOLDER'], token_file.filename)
-        comment_path = os.path.join(app.config['UPLOAD_FOLDER'], comment_file.filename)
-        token_file.save(token_path)
-        comment_file.save(comment_path)
+@app.route('/logout')
+def logout():
+    session.clear()
+    return redirect(url_for('login'))
 
-        tokens = read_file_lines(token_path)
-        comments = read_file_lines(comment_path)
-        post_ids = request.form.get('post_ids').strip().split(',')
-        mention_id = request.form.get('mention_id').strip()
-        mention_name = request.form.get('mention_name').strip()
-        delay = int(request.form.get('delay') or 60)
+@app.route('/create_task')
+def create_task():
+    if 'username' not in session:
+        return redirect(url_for('login'))
+    
+    username = session['username']
+    task_id = str(int(time.time()))
+    tasks_db[username][task_id] = {'running': False}
+    flash('New task created')
+    return redirect(url_for('index'))
 
-        valid_tokens = []
-        for token in tokens:
-            profile_type, profile_name = validate_token(token)
-            if profile_name:
-                valid_tokens.append((token, profile_name))
+@app.route('/start_task/<task_id>')
+def start_task(task_id):
+    if 'username' not in session:
+        return redirect(url_for('login'))
+    
+    username = session['username']
+    if task_id in tasks_db[username]:
+        if not tasks_db[username][task_id]['running']:
+            thread = threading.Thread(target=run_bot, args=(username, task_id))
+            thread.daemon = True
+            thread.start()
+            flash('Task started')
+    
+    return redirect(url_for('index'))
 
-        if not valid_tokens:
-            flash("No valid tokens found.", "danger")
-            return redirect(url_for('index'))
+@app.route('/stop_task/<task_id>')
+def stop_task(task_id):
+    if 'username' not in session:
+        return redirect(url_for('login'))
+    
+    username = session['username']
+    if task_id in tasks_db[username]:
+        tasks_db[username][task_id]['running'] = False
+        flash('Task stopped')
+    
+    return redirect(url_for('index'))
 
-        results = []
-        comment_index = 0
-        token_index = 0
+@app.route('/delete_task/<task_id>')
+def delete_task(task_id):
+    if 'username' not in session:
+        return redirect(url_for('login'))
+    
+    username = session['username']
+    if task_id in tasks_db[username]:
+        tasks_db[username][task_id]['running'] = False
+        del tasks_db[username][task_id]
+        flash('Task deleted')
+    
+    return redirect(url_for('index'))
 
-        while comment_index < len(comments):
-            token, profile_name = valid_tokens[token_index % len(valid_tokens)]
-            comment = comments[comment_index % len(comments)]
-            post_id = post_ids[comment_index % len(post_ids)]
-
-            result = post_comment(post_id, comment, token, mention_id, mention_name)
-            results.append({"post_id": post_id, "comment": comment, "result": result})
-
-            comment_index += 1
-            token_index += 1
-            time.sleep(random.randint(delay, delay + 10))
-
-        return render_template_string(result_template, results=results)
-
-    return render_template_string(index_template)
-
-@app.route('/test-token', methods=['GET'])
-def test_token():
-    token = request.args.get('token')
-    profile_type, name = validate_token(token)
-    return jsonify({"valid": bool(name), "name": name or ""})
-
-# ====== Run =======
 if __name__ == '__main__':
-    port = int(os.environ.get("PORT", 5000))
-    app.run(host='0.0.0.0', port=port)
+    app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 5000)))
