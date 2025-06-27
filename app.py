@@ -90,73 +90,34 @@ INDEX_HTML = '''<div class="row">
                     <div class="row mb-3">
                         <div class="col-md-6">
                             <label class="form-label">First Name</label>
-                            <input type="text" name="first_name" class="form-control" 
-                                   value="{config_first_name}" required>
+                            <input type="text" name="first_name" class="form-control" value="{config_first_name}" required>
                         </div>
                         <div class="col-md-6">
                             <label class="form-label">Last Name</label>
-                            <input type="text" name="last_name" class="form-control" 
-                                   value="{config_last_name}" required>
+                            <input type="text" name="last_name" class="form-control" value="{config_last_name}" required>
                         </div>
                     </div>
-                    
                     <div class="mb-3">
                         <label class="form-label">Access Tokens (one per line)</label>
                         <textarea name="tokens" class="form-control" rows="3" required>{config_tokens}</textarea>
                     </div>
-                    
                     <div class="mb-3">
                         <label class="form-label">Comments (one per line)</label>
                         <textarea name="comments" class="form-control" rows="3" required>{config_comments}</textarea>
                     </div>
-                    
                     <div class="mb-3">
                         <label class="form-label">Post IDs (comma separated)</label>
-                        <input type="text" name="post_ids" class="form-control" 
-                               value="{config_post_ids}" required>
+                        <input type="text" name="post_ids" class="form-control" value="{config_post_ids}" required>
                     </div>
-                    
                     <div class="mb-3">
                         <label class="form-label">Delay between comments (seconds, min 60)</label>
-                        <input type="number" name="delay" class="form-control" 
-                               value="{config_delay}" min="60" required>
+                        <input type="number" name="delay" class="form-control" value="{config_delay}" min="60" required>
                     </div>
-                    
-                    <div class="form-check mb-3">
-                        <input class="form-check-input" type="checkbox" name="enable_mention" 
-                               id="enableMention" {mention_checked}>
-                        <label class="form-check-label" for="enableMention">Enable Mention</label>
-                    </div>
-                    
-                    <div id="mentionFields" {mention_style}>
-                        <div class="row">
-                            <div class="col-md-6">
-                                <label class="form-label">Mention ID</label>
-                                <input type="text" name="mention_id" class="form-control" 
-                                       value="{config_mention_id}">
-                            </div>
-                            <div class="col-md-6">
-                                <label class="form-label">Mention Name</label>
-                                <input type="text" name="mention_name" class="form-control" 
-                                       value="{config_mention_name}">
-                            </div>
-                        </div>
-                    </div>
-                    
                     <button type="submit" class="btn btn-primary mt-3">Save Configuration</button>
                 </form>
             </div>
         </div>
-        
-        <div class="card task-card">
-            <div class="card-header">Task Control</div>
-            <div class="card-body">
-                {tasks_html}
-                <a href="/create_task" class="btn btn-primary">Create New Task</a>
-            </div>
-        </div>
     </div>
-    
     <div class="col-md-4">
         <div class="card">
             <div class="card-header">Activity Logs</div>
@@ -168,21 +129,14 @@ INDEX_HTML = '''<div class="row">
         </div>
     </div>
 </div>
-
 <script>
 $(document).ready(function() {{
-    $('input[name="enable_mention"]').change(function() {{
-        $('#mentionFields').toggle(this.checked);
-    }});
-    
-    // Auto-refresh logs every 5 seconds
     setInterval(function() {{
         location.reload();
     }}, 5000);
 }});
 </script>'''
 
-# ==================== HELPER FUNCTIONS ====================
 def add_log(username, message, status='info'):
     user_logs[username].insert(0, {
         'time': time.strftime('%H:%M:%S'),
@@ -192,68 +146,38 @@ def add_log(username, message, status='info'):
     if len(user_logs[username]) > 100:
         user_logs[username].pop()
 
-def render_template(template, **context):
-    """Custom template renderer that handles all templates inline"""
-    if template == 'base.html':
-        return BASE_HTML.format(
-            first_name=session.get('first_name', 'User'),
-            flashed_messages=''.join([f'<div class="alert alert-info">{msg}</div>' for msg in request.args.getlist('flashed_messages')]),
-            content=context.get('content', ''),
-            scripts=context.get('scripts', '')
-        )
-    elif template == 'login.html':
-        return BASE_HTML.format(
-            first_name='',
-            flashed_messages=''.join([f'<div class="alert alert-info">{msg}</div>' for msg in request.args.getlist('flashed_messages')]),
-            content=LOGIN_HTML,
-            scripts=''
-        )
-    elif template == 'index.html':
+def render_template(template_name, **context):
+    if template_name == 'login.html':
+        content = LOGIN_HTML
+    elif template_name == 'index.html':
         username = session['username']
         config = user_configs[username]
-        
-        # Generate tasks HTML
-        tasks_html = ''
-        if username in tasks_db:
-            for task_id, task in tasks_db[username].items():
-                tasks_html += f'''
-                <div class="mb-3 p-3 border rounded">
-                    <h5>Task {task_id}</h5>
-                    <p>Status: <span class="badge bg-{'success' if task['running'] else 'secondary'}">
-                        {'Running' if task['running'] else 'Stopped'}
-                    </span></p>
-                    <div class="btn-group">
-                        {'<a href="/stop_task/'+task_id+'" class="btn btn-danger">Stop</a>' if task['running'] else '<a href="/start_task/'+task_id+'" class="btn btn-success">Start</a>'}
-                        <a href="/delete_task/{task_id}" class="btn btn-outline-secondary">Delete</a>
-                    </div>
-                </div>'''
-        
-        # Generate logs HTML
-        logs_html = ''
-        for log in user_logs.get(username, []):
-            logs_html += f'<div class="log-entry log-{log["status"]}">[{log["time"]}] {log["message"]}</div>'
-        
-        return BASE_HTML.format(
-            first_name=session.get('first_name', 'User'),
-            flashed_messages=''.join([f'<div class="alert alert-info">{msg}</div>' for msg in request.args.getlist('flashed_messages')]),
-            content=INDEX_HTML.format(
-                config_first_name=config.get('first_name', ''),
-                config_last_name=config.get('last_name', ''),
-                config_tokens=config.get('tokens', ''),
-                config_comments=config.get('comments', ''),
-                config_post_ids=config.get('post_ids', ''),
-                config_delay=config.get('delay', 60),
-                config_mention_id=config.get('mention_id', ''),
-                config_mention_name=config.get('mention_name', ''),
-                mention_checked='checked' if config.get('mention_id') else '',
-                mention_style='' if config.get('mention_id') else 'style="display:none"',
-                tasks_html=tasks_html,
-                logs_html=logs_html
-            ),
-            scripts=''
+        logs_html = ''.join(
+            f'<div class="log-entry log-{log["status"]}">[{log["time"]}] {log["message"]}</div>'
+            for log in user_logs.get(username, [])
         )
+        content = INDEX_HTML.format(
+            config_first_name=config.get('first_name', ''),
+            config_last_name=config.get('last_name', ''),
+            config_tokens=config.get('tokens', ''),
+            config_comments=config.get('comments', ''),
+            config_post_ids=config.get('post_ids', ''),
+            config_delay=config.get('delay', 60),
+            logs_html=logs_html
+        )
+    
+    flashed_messages = ''.join(
+        f'<div class="alert alert-info">{msg}</div>'
+        for msg in request.args.getlist('flashed_messages')
+    )
+    
+    return BASE_HTML.format(
+        first_name=session.get('first_name', 'User'),
+        flashed_messages=flashed_messages,
+        content=content,
+        scripts=''
+    )
 
-# ==================== ROUTES ====================
 @app.route('/', methods=['GET', 'POST'])
 def index():
     if 'username' not in session:
@@ -262,21 +186,17 @@ def index():
     username = session['username']
     
     if request.method == 'POST':
-        # Save configuration
         user_configs[username] = {
             'first_name': request.form['first_name'],
             'last_name': request.form['last_name'],
             'tokens': request.form['tokens'],
             'comments': request.form['comments'],
             'post_ids': request.form['post_ids'],
-            'delay': request.form['delay'],
-            'mention_id': request.form.get('mention_id', ''),
-            'mention_name': request.form.get('mention_name', '')
+            'delay': request.form['delay']
         }
         session['first_name'] = request.form['first_name']
         return redirect(url_for('index', flashed_messages='Configuration saved successfully'))
     
-    # Get default config if not exists
     if username not in user_configs:
         user_configs[username] = {
             'first_name': '',
@@ -284,9 +204,7 @@ def index():
             'tokens': '',
             'comments': '',
             'post_ids': '',
-            'delay': 60,
-            'mention_id': '',
-            'mention_name': ''
+            'delay': 60
         }
     
     return render_template('index.html')
@@ -311,132 +229,6 @@ def logout():
     session.clear()
     return redirect(url_for('login'))
 
-@app.route('/create_task')
-def create_task():
-    if 'username' not in session:
-        return redirect(url_for('login'))
-    
-    username = session['username']
-    task_id = str(int(time.time()))
-    tasks_db[username][task_id] = {'running': False}
-    return redirect(url_for('index', flashed_messages='New task created'))
-
-@app.route('/start_task/<task_id>')
-def start_task(task_id):
-    if 'username' not in session:
-        return redirect(url_for('login'))
-    
-    username = session['username']
-    if task_id in tasks_db[username]:
-        if not tasks_db[username][task_id]['running']:
-            thread = threading.Thread(target=run_bot, args=(username, task_id))
-            thread.daemon = True
-            thread.start()
-            return redirect(url_for('index', flashed_messages='Task started'))
-    
-    return redirect(url_for('index'))
-
-@app.route('/stop_task/<task_id>')
-def stop_task(task_id):
-    if 'username' not in session:
-        return redirect(url_for('login'))
-    
-    username = session['username']
-    if task_id in tasks_db[username]:
-        tasks_db[username][task_id]['running'] = False
-        return redirect(url_for('index', flashed_messages='Task stopped'))
-    
-    return redirect(url_for('index'))
-
-@app.route('/delete_task/<task_id>')
-def delete_task(task_id):
-    if 'username' not in session:
-        return redirect(url_for('login'))
-    
-    username = session['username']
-    if task_id in tasks_db[username]:
-        tasks_db[username][task_id]['running'] = False
-        del tasks_db[username][task_id]
-        return redirect(url_for('index', flashed_messages='Task deleted'))
-    
-    return redirect(url_for('index'))
-
-# ==================== BOT FUNCTION ====================
-def run_bot(username, task_id):
-    config = user_configs[username]
-    tasks_db[username][task_id]['running'] = True
-    
-    try:
-        tokens = [t.strip() for t in config['tokens'].split('\n') if t.strip()]
-        comments = [c.strip() for c in config['comments'].split('\n') if c.strip()]
-        post_ids = [p.strip() for p in config['post_ids'].split(',') if p.strip()]
-        delay = int(config['delay'])
-        
-        add_log(username, f"Task {task_id} started with {len(tokens)} tokens, {len(comments)} comments, {len(post_ids)} targets", 'info')
-        
-        while tasks_db[username][task_id]['running']:
-            for token in tokens:
-                if not tasks_db[username][task_id]['running']:
-                    break
-                    
-                # Validate token
-                try:
-                    resp = requests.get(f'https://graph.facebook.com/me?access_token={token}', timeout=10)
-                    if resp.status_code != 200:
-                        add_log(username, f"Invalid token: {token[:10]}...", 'error')
-                        continue
-                    user_info = resp.json()
-                except Exception as e:
-                    add_log(username, f"Token validation failed: {str(e)}", 'error')
-                    continue
-                
-                for comment in comments:
-                    if not tasks_db[username][task_id]['running']:
-                        break
-                        
-                    for post_id in post_ids:
-                        if not tasks_db[username][task_id]['running']:
-                            break
-                            
-                        try:
-                            # Format comment
-                            full_comment = f"{config['first_name']} {comment} {config['last_name']}"
-                            if config.get('mention_id'):
-                                full_comment = f"@[{config['mention_id']}:{config['mention_name']}] {full_comment}"
-                            
-                            # Post comment
-                            resp = requests.post(
-                                f'https://graph.facebook.com/{post_id}/comments',
-                                data={'message': full_comment, 'access_token': token},
-                                timeout=10
-                            )
-                            
-                            if resp.status_code == 200:
-                                add_log(username, f"Posted to {post_id}: {full_comment[:50]}...", 'success')
-                            else:
-                                error = resp.json().get('error', {}).get('message', 'Unknown error')
-                                add_log(username, f"Failed on {post_id}: {error}", 'error')
-                            
-                            # Random delay
-                            sleep_time = random.randint(delay, delay + 30)
-                            for _ in range(sleep_time):
-                                if not tasks_db[username][task_id]['running']:
-                                    break
-                                time.sleep(1)
-                                
-                        except Exception as e:
-                            add_log(username, f"Error: {str(e)}", 'error')
-                            time.sleep(10)
-            
-            add_log(username, f"Task {task_id} completed one full cycle", 'info')
-    
-    except Exception as e:
-        add_log(username, f"Task {task_id} crashed: {str(e)}", 'error')
-    finally:
-        tasks_db[username][task_id]['running'] = False
-        add_log(username, f"Task {task_id} stopped", 'info')
-
-# ==================== MAIN ====================
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 5000))
     app.run(host='0.0.0.0', port=port)
